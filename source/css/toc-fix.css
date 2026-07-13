@@ -1,0 +1,20 @@
+/* TOC 层级清晰化 */
+#card-toc .toc-content > ol > .toc-item > .toc-link {
+  font-weight: 700;
+  font-size: 0.95em;
+  padding-left: 12px;
+  border-left: 2px solid var(--theme-color, #49b1f5);
+}
+
+#card-toc .toc-content .toc-child .toc-link {
+  font-weight: 400;
+  font-size: 0.85em;
+  padding-left: 24px;
+  opacity: 0.85;
+}
+
+#card-toc .toc-content .toc-child .toc-child .toc-link {
+  font-size: 0.8em;
+  padding-left: 36px;
+  opacity: 0.7;
+}
