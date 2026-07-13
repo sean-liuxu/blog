@@ -42,29 +42,81 @@ helm version
 # version.BuildInfo{Version:"v3.17+", GitCommit:"...", GitTreeState:"clean", GoVersion:"go1.24"}
 ```
 
-### 1.2 添加 Chart 仓库
+### 1.2 搭建本地 Chart 仓库
+
+由于国内访问 Bitnami 等国外仓库很慢，我们**从零搭建一个本地 Chart 仓库**，同时也理解仓库的底层原理。
+
+一个 Helm 仓库本质上就是一个 HTTP 服务器 + `index.yaml` 索引文件 + 打包好的 `.tgz` 文件。
+
+**第一步：创建目录结构**
 
 ``` bash
-# 添加官方仓库
-helm repo add bitnami https://charts.bitnami.com/bitnami
-
-# 查看已添加的仓库
-helm repo list
-
-# 更新本地仓库索引
-helm repo update
-
-# 搜索可用的 Chart
-helm search repo bitnami/nginx
+mkdir -p ~/helm-repo/charts
+cd ~/helm-repo
 ```
 
-### 1.3 第一个 Helm 部署：安装 nginx
+**第二步：快速准备一个 Chart**
 
-直接从仓库安装一个 nginx，感受 Helm 的基本流程：
+先用 `helm create` 生成一个脚手架 Chart 作为仓库的第一个"货物"：
 
 ``` bash
-# 安装
-helm install my-nginx bitnami/nginx
+helm create my-nginx
+```
+
+这会生成一个标准的 Chart 目录。我们稍作修改，把镜像换成国内可用的：
+
+``` bash
+# 修改 values.yaml 中的镜像为华为云 SWR 国内镜像
+sed -i 's/repository: nginx/repository: ddn-k8s\/docker.io\/nginx/' my-nginx/values.yaml
+sed -i 's/tag: ""/tag: "stable"/' my-nginx/values.yaml
+```
+
+> 镜像地址是 `swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nginx:stable`。Chart 的 `values.yaml` 里，`registry` + `repository` + `tag` 三段组合成完整镜像路径。
+
+**第三步：打包并生成仓库索引**
+
+``` bash
+# 将 Chart 打包成 .tgz，输出到 charts 目录
+helm package my-nginx -d charts/
+# 生成: charts/my-nginx-0.1.0.tgz
+
+# 生成仓库索引文件
+helm repo index charts/ --url http://127.0.0.1:8879/charts
+# 生成: charts/index.yaml
+
+# 看看索引文件内容
+cat charts/index.yaml
+```
+
+**第四步：启动本地仓库服务**
+
+``` bash
+# 用 Python 起一个简单的 HTTP 服务（新开一个终端窗口）
+cd ~/helm-repo
+python3 -m http.server 8879
+```
+
+**第五步：添加本地仓库并用它安装**
+
+``` bash
+# 添加本地仓库
+helm repo add local http://127.0.0.1:8879/charts
+
+# 查看已有仓库
+helm repo list
+# local    http://127.0.0.1:8879/charts
+
+# 搜索本地仓库中的 Chart
+helm search repo local/
+```
+
+> **仓库原理小结**：`helm repo add` 只是记下了一个 URL，`helm search` 去那个 URL 下载 `index.yaml` 进行检索，`helm install` 则下载对应的 `.tgz` 包并部署到集群。
+
+### 1.3 第一个 Helm 部署：安装本地 Chart
+
+``` bash
+# 从本地仓库安装
+helm install my-nginx local/my-nginx
 
 # 查看已安装的 Release
 helm list
@@ -90,7 +142,7 @@ curl http://localhost:8080
 helm history my-nginx
 
 # 修改配置后升级（比如调整副本数）
-helm upgrade my-nginx bitnami/nginx --set replicaCount=3
+helm upgrade my-nginx local/my-nginx --set replicaCount=3
 
 # 再次查看历史，多了一条记录
 helm history my-nginx
@@ -295,8 +347,9 @@ appVersion: "1.25"
 replicaCount: 1
 
 image:
-  repository: nginx
-  tag: "1.25"
+  registry: swr.cn-north-4.myhuaweicloud.com
+  repository: ddn-k8s/docker.io/nginx
+  tag: "stable"
   pullPolicy: IfNotPresent
 
 service:
@@ -391,7 +444,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -499,7 +552,7 @@ nginx-chart/
 replicaCount: 1
 
 image:
-  tag: "1.25"
+  tag: "stable"
 
 service:
   type: NodePort
@@ -534,7 +587,7 @@ nginxConf: |
 replicaCount: 3
 
 image:
-  tag: "1.25"
+  tag: "stable"
 
 service:
   type: ClusterIP
