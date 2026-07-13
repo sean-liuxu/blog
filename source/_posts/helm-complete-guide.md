@@ -228,6 +228,10 @@ service:
 
 ### 2.4 _helpers.tpl — 模板复用
 
+`_helpers.tpl` 是用来存放**可复用的模板片段**的文件，类似于编程中的公共函数。Helm 不会把它当作 K8s 资源去渲染，只在 `include` 调用时才执行。
+
+来看一段最典型的：
+
 ``` tpl
 {% raw %}{{/*
 Create a default fully qualified app name.
@@ -245,7 +249,29 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}{% endraw %}
 ```
 
-`define` 定义可复用的模板片段，`include` 在别处调用。`{{-` 和 `-}}` 用于去除模板输出前后的空白。
+**逐行拆解：**
+
+| 语法 | 含义 |
+|---|---|
+| `define "xxx"` … `end` | 定义一个名为 `xxx` 的可复用片段 |
+| `include "xxx" .` | 调用定义好的片段，`.` 表示把当前上下文传进去 |
+| `{{-` 和 `-}}` | 吃掉模板输出**前后**的空白，避免渲染出多余空行 |
+| `{% raw %}{{/* ... */}}{% endraw %}` | 模板注释，渲染后不产出任何内容 |
+
+**`trunc 63` 和 `trimSuffix "-"` 解释：**
+
+Kubernetes 资源名称最长 **63 个字符**。`trunc 63` 就是把 Release 名截断到 63 字符以内。但截断后末尾可能是 `-`，而 K8s 不允许名称以 `-` 结尾 — `trimSuffix "-"` 负责把末尾的 `-` 去掉。
+
+> **实战示例**：假设 `helm install my-release-with-a-very-long-name-that-exceeds-63-characters-total`，模板会把名字截断为合法的 K8s 资源名。
+
+**第二个 define 的效果：** 假设你的 Release 叫 `my-blog`，渲染后输出：
+
+``` yaml
+app.kubernetes.io/name: demo-chart
+app.kubernetes.io/instance: my-blog
+```
+
+这些是 Kubernetes 推荐的标准标签，用于标识资源归属，`kubectl get all -l app.kubernetes.io/instance=my-blog` 就能精确筛选出这个 Release 创建的所有资源。
 
 ### 2.5 内置对象速查
 
@@ -273,6 +299,18 @@ metadata:
   name: {{ include "demo-chart.serviceAccountName" . }}
 {{- end }}{% endraw %}
 ```
+
+`{% raw %}{{- if .Values.serviceAccount.create }}{% endraw %}` 的含义是：**读取 values.yaml 中 `serviceAccount.create` 的值，如果为 `true`，就渲染这个 ServiceAccount 资源；如果为 `false`，整段跳过不生成。**
+
+对应的 values.yaml 中应该有：
+
+``` yaml
+serviceAccount:
+  create: true
+  name: ""
+```
+
+> **为什么需要这个？** 不是所有场景都需要独立的 ServiceAccount。Helm 用 if 开关让同一个 Chart 适配不同环境 — 开发环境可以关掉，生产环境打开。这就是"配置驱动"的核心思想。
 
 **range 循环遍历：**
 
