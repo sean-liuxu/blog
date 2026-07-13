@@ -194,9 +194,9 @@ toc:
   post: true
   page: false
   number: true
-  expand: false
+  expand: true
   # Only for post
-  style_simple: false
+  style_simple: true
   scroll_percent: true
 
 post_copyright:
