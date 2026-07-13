@@ -67,11 +67,11 @@ helm create my-nginx
 
 ``` bash
 # 修改 values.yaml 中的镜像为华为云 SWR 国内镜像
-sed -i 's/repository: nginx/repository: ddn-k8s\/docker.io\/nginx/' my-nginx/values.yaml
+sed -i 's|repository: ddn-k8s/docker.io/nginx|repository: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nginx|' my-nginx/values.yaml
 sed -i 's/tag: ""/tag: "stable"/' my-nginx/values.yaml
 
 # 修改后检查
-grep -A2 'image:' my-nginx/values.yaml
+sed '/^[[:space:]]*#/d' my-nginx/values.yaml | grep -A3 'image:'
 # image:
 #   repository: ddn-k8s/docker.io/nginx
 #   tag: "stable"
