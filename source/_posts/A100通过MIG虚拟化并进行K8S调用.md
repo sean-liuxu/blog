@@ -3,7 +3,7 @@ title: GPU虚拟化 - MIG
 date: 2026-07-14 10:00:00
 tags:
   - Kubernetes
-  - gpu虚拟化
+  - GPU虚拟化
 categories:
   - 云原生
 ---
