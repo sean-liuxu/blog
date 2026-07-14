@@ -262,7 +262,7 @@ footer:
     since: 2025
   # Copyright of theme and framework
   copyright:
-    enable: true
+    enable: false
     version: false
   custom_text:
 
