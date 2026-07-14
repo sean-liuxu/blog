@@ -3,6 +3,7 @@ title: MinIO 完整掌握 — 从零搭建对象存储
 date: 2026-07-14 15:00:00
 tags:
   - MinIO
+  - 存储
 categories:
   - 云原生
 ---

@@ -180,25 +180,29 @@ tree demo-chart
 输出：
 
 ```
+tree
 demo-chart/
-├── Chart.yaml          # Chart 元信息
-├── values.yaml         # 默认配置值
-├── charts/             # 依赖的子 Chart
-├── templates/          # 模板文件
-│   ├── NOTES.txt       # 安装后提示信息
-│   ├── _helpers.tpl    # 模板辅助函数
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── hpa.yaml
-│   ├── ingress.yaml
-│   ├── serviceaccount.yaml
-│   └── tests/          # 测试
-└── .helmignore
+├── charts               # 依赖的子Chart
+├── Chart.yaml           # Chart元信息
+├── templates            # 模板文件
+│   ├── deployment.yaml
+│   ├── _helpers.tpl     # 模板辅助函数
+│   ├── hpa.yaml
+│   ├── httproute.yaml
+│   ├── ingress.yaml
+│   ├── NOTES.txt        # 安装后提示信息
+│   ├── serviceaccount.yaml
+│   ├── service.yaml
+│   └── tests
+│       └── test-connection.yaml
+└── values.yaml          # 默认配置值
 ```
 
 ### 2.2 Chart.yaml — Chart 的身份证
 
 ``` yaml
+cd demo-chart
+awk '!/^[[:space:]]*#/ && NF' Chart.yaml
 apiVersion: v2
 name: demo-chart
 description: A Helm chart for Kubernetes
