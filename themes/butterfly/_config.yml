@@ -263,7 +263,7 @@ footer:
   # Copyright of theme and framework
   copyright:
     enable: true
-    version: true
+    version: false
   custom_text:
 
 # --------------------------------------
