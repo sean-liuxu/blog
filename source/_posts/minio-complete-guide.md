@@ -3,9 +3,6 @@ title: MinIO 完整掌握 — 从零搭建对象存储
 date: 2026-07-14 15:00:00
 tags:
   - MinIO
-  - 对象存储
-  - S3
-  - 教程
 categories:
   - 云原生
 ---
