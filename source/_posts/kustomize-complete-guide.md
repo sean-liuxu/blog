@@ -41,16 +41,14 @@ kubectl version --client | grep Kustomize
 
 ### 1.2 第一个 Kustomize 项目
 
-创建如下目录结构：
+一键创建整个 base 目录和所有文件：
 
 ``` bash
 mkdir -p kustomize-demo/base
 cd kustomize-demo
-```
 
-**base/deployment.yaml**
-
-``` yaml
+# --- 创建 base/deployment.yaml ---
+cat > base/deployment.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -69,11 +67,10 @@ spec:
           image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nginx:stable
           ports:
             - containerPort: 80
-```
+EOF
 
-**base/service.yaml**
-
-``` yaml
+# --- 创建 base/service.yaml ---
+cat > base/service.yaml <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -84,17 +81,19 @@ spec:
   ports:
     - port: 80
       targetPort: 80
-```
+EOF
 
-**base/kustomization.yaml**
-
-``` yaml
+# --- 创建 base/kustomization.yaml ---
+cat > base/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - deployment.yaml
   - service.yaml
+EOF
+
+echo "base 文件创建完毕！"
 ```
 
 ### 1.3 运行
@@ -121,28 +120,17 @@ kubectl delete -k base/
 
 Kustomize 的核心模式：**base 写不变的部分，overlay 只写差异**。
 
-### 2.1 创建目录结构
+### 2.1 创建 overlay 目录和文件
 
-```
-kustomize-demo/
-├── base/
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── kustomization.yaml
-└── overlays/
-    ├── dev/
-    │   └── kustomization.yaml
-    ├── test/
-    │   └── kustomization.yaml
-    └── prod/
-        └── kustomization.yaml
-```
+``` bash
+# 确保在 kustomize-demo 目录下
+cd kustomize-demo
 
-### 2.2 dev overlay — 最简单的差异：改副本数
+# 创建三个环境的目录
+mkdir -p overlays/{dev,test,prod}
 
-**overlays/dev/kustomization.yaml**
-
-``` yaml
+# --- dev overlay ---
+cat > overlays/dev/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -161,15 +149,10 @@ namespace: dev
 # 统一加标签
 commonLabels:
   env: dev
-```
+EOF
 
-`replicas` 是 Kustomize 内置的快捷字段，专门用来 **原地修改 Deployment 的 replicas**，不需要写 patch 文件。
-
-### 2.3 test overlay — 用 patches 改更多东西
-
-**overlays/test/kustomization.yaml**
-
-``` yaml
+# --- test overlay ---
+cat > overlays/test/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -194,15 +177,10 @@ patches:
     target:
       kind: Deployment
       name: nginx
-```
+EOF
 
-> **patches 语法**：使用 JSON Patch（RFC 6902）。`op` 可以是 `replace` / `add` / `remove`，`path` 用 `/` 指到目标字段。上面这条语义是："把 nginx Deployment 的容器镜像换成 alpine 版"。
-
-### 2.4 prod overlay — 更完整的生产配置
-
-**overlays/prod/kustomization.yaml**
-
-``` yaml
+# --- prod overlay ---
+cat > overlays/prod/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -235,9 +213,38 @@ patches:
     target:
       kind: Deployment
       name: nginx
+EOF
+
+echo "overlay 文件创建完毕！"
+tree overlays/
 ```
 
-### 2.5 渲染对比
+最终目录结构：
+
+```
+kustomize-demo/
+├── base/
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   └── kustomization.yaml
+└── overlays/
+    ├── dev/
+    │   └── kustomization.yaml
+    ├── test/
+    │   └── kustomization.yaml
+    └── prod/
+        └── kustomization.yaml
+```
+
+### 2.2 dev overlay — 最简单的差异
+
+`replicas` 是 Kustomize 内置的快捷字段，专门用来 **原地修改 Deployment 的 replicas**，不需要写 patch 文件。加了 `namespace: dev` 和 `commonLabels.env: dev`，所有 base 资源自动打上环境标签。
+
+### 2.3 test overlay — 用 patches 改更多东西
+
+`patches` 使用 JSON Patch（RFC 6902）。`op` 可以是 `replace` / `add` / `remove`，`path` 用 `/` 指到目标字段。上面这条语义是："把 nginx Deployment 的容器镜像换成 alpine 版"。
+
+### 2.4 渲染对比
 
 ``` bash
 # 分别查看三个环境的最终 YAML
@@ -258,16 +265,14 @@ Kustomize 不仅能 patch 已有资源，还能**自动生成** ConfigMap、Secr
 
 创建环境专属的 nginx 配置：
 
-```
-overlays/dev/
-├── kustomization.yaml
-└── nginx-conf/
-    └── default.conf
-```
+``` bash
+# 确保在 kustomize-demo 目录下
+cd kustomize-demo
 
-**overlays/dev/nginx-conf/default.conf**
+# 创建 nginx 配置目录和文件
+mkdir -p overlays/dev/nginx-conf
 
-``` nginx
+cat > overlays/dev/nginx-conf/default.conf <<'EOF'
 server {
     listen 80;
     server_name localhost;
@@ -277,17 +282,18 @@ server {
         add_header X-Environment "DEV";
     }
 }
-```
+EOF
 
-然后在 `overlays/dev/kustomization.yaml` 中加上：
-
-``` yaml
-# ... 原有内容 ...
+# 在 kustomization.yaml 中追加 configMapGenerator
+cat >> overlays/dev/kustomization.yaml <<'EOF'
 
 configMapGenerator:
   - name: nginx-config
     files:
       - nginx-conf/default.conf
+EOF
+
+echo "ConfigMap 配置创建完毕！"
 ```
 
 渲染出来看看：
