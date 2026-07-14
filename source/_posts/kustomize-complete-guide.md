@@ -5,7 +5,6 @@ tags:
   - Kubernetes
   - Kustomize
   - DevOps
-  - 教程
 categories:
   - 云原生
 ---
