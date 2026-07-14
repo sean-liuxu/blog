@@ -734,7 +734,136 @@ make build
 
 ---
 
-## 八、总结：Helm vs Kustomize 选型指南
+## 八、生产排障：常见问题速查
+
+### 8.1 `kubectl apply -k` 报 `accumulating resources: ... doesn't exist`
+
+``` bash
+# resources 中引用的文件不存在
+cat kustomization.yaml | grep resources
+
+# 解决：确认文件路径正确，相对路径是相对于 kustomization.yaml 所在目录
+ls -la <path>/deployment.yaml
+```
+
+### 8.2 ConfigMap 名称对不上导致挂载失败
+
+``` bash
+# 渲染出来确认实际 ConfigMap 名称
+kubectl kustomize overlays/prod/ | grep -A2 'kind: ConfigMap'
+# 名字会带 hash 后缀，如 nginx-config-7k4m8d5g2f
+
+# Deployment 中引用用原名即可，Kustomize 自动替换
+# 如果手动写了带 hash 的名字反而会失败
+```
+
+### 8.3 patch 不生效 / YAML 格式报错
+
+``` bash
+# 常见原因：JSON Patch 的 path 写错了
+# 正确格式：/spec/template/spec/containers/0/image
+# 注意数组序号从 0 开始，字段名大小写敏感
+
+# 先渲染检查
+kubectl kustomize overlays/prod/ | grep image
+
+# 用 yq 验格式
+kubectl kustomize overlays/prod/ | yq '.spec.template.spec.containers[0].image'
+```
+
+### 8.4 `images` 替换不生效
+
+``` bash
+# images 字段中 name 必须和 Deployment 中 image 字段的前缀完全匹配
+# 错：name: nginx
+# 对：name: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nginx
+
+# 检查 Deployment 中的原始镜像
+grep image base/deployment.yaml
+```
+
+### 8.5 `helmCharts` 报 `Error: no repositories found`
+
+``` bash
+# helmCharts 引用外部仓库需要先 helm repo add
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+
+# 或者用国内镜像
+helm repo add aliyun https://kubernetes.oss-cn-hangzhou.aliyuncs.com/charts
+```
+
+### 8.6 `kubectl kustomize` 报 `cyclic dependency detected`
+
+``` yaml
+# 原因：kustomization.yaml 引用了自己所在的目录
+# 错：
+# base/kustomization.yaml 中 resources 包含 ../base
+# 对：resources 只能引用子目录或同级文件
+```
+
+### 8.7 多 overlay 共享 base 时 base 改动影响所有环境
+
+``` bash
+# 改 base 前先看哪些 overlay 引用了它
+grep -r "../../base" overlays/*/kustomization.yaml
+
+# 改 base 后用 diff 确认各 overlay 变化
+diff <(kubectl kustomize overlays/dev/) <(kubectl kustomize overlays/prod/)
+```
+
+### 8.8 secretGenerator 生成的值是明文的？
+
+``` yaml
+# 是的。kustomization.yaml 中 secretGenerator.literals 的值是明文
+# 不要提交到 Git。应该：
+# 1. 用 .env.enc (sops 加密) + envs 字段
+# 2. 或者用外部密钥管理（Vault/Sealed Secrets）
+```
+
+---
+
+## 九、面试高频 12 题
+
+**1. Kustomize 和 Helm 的区别？**
+Helm 是模板引擎（`{{ .Values.xxx }}`），Kustomize 是配置叠加（base + patch）。Helm 适合分发通用包，Kustomize 适合多环境配置管理。`kubectl apply -k` 是 K8s 内置能力。
+
+**2. base 和 overlay 是什么？**
+base 定义通用的基础配置；overlay 针对特定环境声明差异（如副本数、镜像 tag、namespace）。渲染时 base + overlay 合并成最终 YAML。
+
+**3. Kustomize 怎么改 Deployment 副本数？**
+`replicas:` 字段是内置快捷方式，直接声明 Deployment 名和副本数，不需要写 JSON Patch。
+
+**4. `patches` 只支持 JSON Patch 吗？**
+JSON Patch（RFC 6902）最常用，支持 `replace`/`add`/`remove`。新版 Kustomize 也支持 Strategic Merge Patch。
+
+**5. ConfigMap 名字后面为什么有 hash？**
+Kustomize 根据 ConfigMap 内容生成 hash 后缀。内容变了 hash 就变 → Deployment 自动滚动更新 → 新配置自动生效。不用手动 `kubectl rollout restart`。
+
+**6. hash 名称变了，Deployment 挂载会不会对不上？**
+不会。Kustomize 会扫描所有资源，把引用原名称（如 `nginx-config`）的地方全部替换为带 hash 的实际名称。
+
+**7. `images` 字段怎么用？**
+声明式镜像 tag 替换。`images.name` 匹配 Deployment 中的镜像名，`newTag` 指定新 tag。CI 中动态注入 git commit hash 最常见。
+
+**8. `helmCharts` 和 Kustomize 的关系？**
+Kustomize 5+ 可以通过 `helmCharts` 引入 Helm Chart 并渲染为 base 资源，再用 Kustomize 的 patch/replicas/images 做二次定制。相当于 Helm 负责拉包，Kustomize 负责调参。
+
+**9. `commonLabels` 和 `labels` 的区别？**
+`commonLabels` 会给所有资源（包括 Deployment 的 template labels）加标签；`labels` 只给顶层资源加，不会影响 Pod template。
+
+**10. `namespace` 配置会覆盖 base 中的 namespace 吗？**
+会。overlay 中的 `namespace` 会覆盖所有资源的 namespace 字段。
+
+**11. 多个 overlay 怎么管理？避免重复配置？**
+创建 `overlays/common/` 存放公共 overlay，各环境 overlay 引用它。或者用 Kustomize 的 `components` 特性。
+
+**12. 生产和开发用同一套 Kustomize，怎么防止误改 base？**
+Git PR + review 流程。base 的改动会影响所有 overlay，所以 base 变更必须经过 Code Review。CI 中用 `kubectl kustomize` 渲染各 overlay 做 diff 检查。
+
+---
+
+## 十、总结：Helm vs Kustomize 选型指南
 
 | 场景 | 推荐工具 |
 |---|---|

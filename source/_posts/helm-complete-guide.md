@@ -957,7 +957,149 @@ helm-push:
 
 ---
 
-## 八、总结：从入门到生产的学习路径
+## 八、生产排障：常见问题速查
+
+### 8.1 `helm install` 报 `Error: INSTALLATION FAILED`
+
+**现象**：`Error: INSTALLATION FAILED: Unable to continue with install: ...`
+
+``` bash
+# 最常见：Release 名已存在
+helm list -A | grep <name>
+
+# 解决：卸载旧的或换个名字
+helm uninstall <name> -n <ns>
+helm install <new-name> <chart> -n <ns>
+```
+
+### 8.2 `Error: UPGRADE FAILED: another operation is in progress`
+
+``` bash
+# 查看 pending 状态
+helm history <release> -n <ns>
+# 最后一条显示 pending-upgrade 或 pending-install
+
+# 解决：删除 pending 记录
+kubectl get secret -n <ns> | grep <release>
+kubectl delete secret -n <ns> sh.helm.release.v1.<release>.v<rev>
+```
+
+### 8.3 `Error: configmaps already exists`
+
+Helm 创建的资源名与已有资源冲突：
+
+``` bash
+# 查看冲突资源
+kubectl get configmap <name> -n <ns>
+
+# 不是 Helm 管的就删掉
+kubectl delete configmap <name> -n <ns>
+
+# 是旧 Release 残留就清理
+helm uninstall <old-release> -n <ns>
+```
+
+### 8.4 模板渲染不符合预期
+
+``` bash
+# 本地渲染看结果，不改集群
+helm template <name> <chart> -f values.yaml --debug
+
+# 对比两个 values 渲染差异
+diff <(helm template . -f values-dev.yaml) <(helm template . -f values-prod.yaml)
+```
+
+### 8.5 `helm repo update` 报 `Error: no repositories found`
+
+``` bash
+helm repo list
+# 输出为空：没添加过仓库
+
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo add aliyun https://kubernetes.oss-cn-hangzhou.aliyuncs.com/charts
+helm repo update
+```
+
+### 8.6 Pod 拉镜像失败（国内环境）
+
+Chart 默认从 `docker.io` 拉镜像。用 `--set` 或修改 values 替换为国内镜像：
+
+``` bash
+helm install my-nginx aliyun/nginx \
+  --set image.registry=swr.cn-north-4.myhuaweicloud.com \
+  --set image.repository=ddn-k8s/docker.io/nginx \
+  --set image.tag=stable
+```
+
+### 8.7 `helm rollback` 回滚失败
+
+``` bash
+# 看历史，确认有可回滚的版本
+helm history <release> -n <ns>
+
+# 指定回滚到某个版本
+helm rollback <release> <rev> -n <ns>
+
+# 如果回滚报 secret 找不到，说明被手动删了，无法回滚
+# 只能 helm upgrade 覆盖当前版本
+```
+
+### 8.8 helm-secrets 解密失败
+
+``` bash
+# 常见原因：SOPS 找不到 PGP 私钥
+gpg --list-secret-keys
+
+# 确认环境变量
+echo $SOPS_PGP_FP
+
+# 手动解密测试
+sops --decrypt secrets.yaml.enc
+```
+
+---
+
+## 九、面试高频 12 题
+
+**1. Helm 是什么？解决了什么问题？**
+Helm 是 K8s 的包管理器，把一组 K8s YAML 打包成 Chart，解决"应用部署需要写一堆 YAML、每次改副本数要手动改多个文件"的问题。
+
+**2. Chart 和 Release 的区别？**
+Chart 是模板包（代码），Release 是 Chart 在集群中的一个部署实例（运行时）。一个 Chart 可以装出多个 Release。
+
+**3. `helm install` 和 `helm upgrade --install` 的区别？**
+`helm install` 资源不存在时安装，已存在则报错；`helm upgrade --install` 不存在就装，存在就升级。CI/CD 用后者更安全。
+
+**4. values.yaml 合并顺序是什么？**
+默认 values.yaml → `-f` 指定文件 → `--set` 命令行，后面的覆盖前面的。嵌套对象是 merge 而非 replace。
+
+**5. `_helpers.tpl` 的作用？**
+存放可复用的模板函数（define/invoke），类似代码里的公共函数。Helm 不会把它渲染成 K8s 资源，只供其他模板 `include` 调用。
+
+**6. `trunc 63 | trimSuffix "-"` 为什么？**
+K8s 资源名最长 63 字符，`trunc` 截断，`trimSuffix` 去掉末尾 `-`（K8s 不允许以 `-` 结尾）。
+
+**7. `helm template` 和 `helm install` 的区别？**
+`helm template` 只渲染 YAML 到标准输出，不部署、不记录 Release；`helm install` 部署到集群并记录状态。
+
+**8. Helm Hooks 是什么？**
+在 Release 生命周期的特定阶段执行 Job（如安装前初始化数据库、升级后清理旧资源）。常见的 hook：`pre-install`、`post-upgrade`、`pre-delete`。
+
+**9. Chart 依赖怎么管理？**
+`Chart.yaml` 中 `dependencies` 字段声明，`helm dependency update` 下载。或者直接把依赖 Chart 放到 `charts/` 目录。
+
+**10. helm rollback 的原理？**
+每次 install/upgrade 都创建一个 Secret 存储当时的 manifests 和 values。rollback 就是切回某个历史 Secret，应用当时的配置。
+
+**11. ChartMuseum 和 Harbor 区别？**
+都是 Chart 私仓。ChartMuseum 只存 Helm Chart；Harbor 是全能镜像仓库，同时存容器镜像 + Helm Chart。
+
+**12. 生产上用 Helm 最大的坑？**
+`helm upgrade` 时 values 不完整导致部分配置被"重置"为默认值。解决：始终传完整的 values（`-f values-prod.yaml`），不要依赖 Chart 默认值。
+
+---
+
+## 十、总结：从入门到生产的学习路径
 
 回头看，你已完成了这样一条路径：
 

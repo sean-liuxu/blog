@@ -537,7 +537,155 @@ print(f"上传链接（10分钟内有效）：\n{url}")
 
 ---
 
-## 七、总结
+## 七、生产排障：常见问题速查
+
+### 7.1 `drive is part of root drive, will not be used`
+
+```
+ERROR: drive is part of root drive, will not be used
+```
+
+MinIO 拒绝使用系统根分区做数据盘。根分区 IO 压力会拖垮系统，根盘故障则系统 + 数据同时丢失。
+
+``` bash
+# 解决：用独立分区
+mkdir -p /mnt/disk1 /mnt/disk2 /mnt/disk3 /mnt/disk4
+minio server /mnt/disk1 /mnt/disk2 /mnt/disk3 /mnt/disk4
+```
+
+### 7.2 分布式模式 `connection refused`
+
+``` bash
+# ❌ 错误：单进程写多端口
+minio server http://127.0.0.1:9000/disk1 http://127.0.0.1:9001/disk2 ...
+
+# ✅ 正确：单机多盘用本地路径，分布式多机统一端口
+minio server /mnt/disk1 /mnt/disk2 /mnt/disk3 /mnt/disk4
+```
+
+### 7.3 mc 连接 TLS 报 `x509: certificate signed by unknown authority`
+
+``` bash
+# 自签名证书，3 种方案任选其一：
+
+# 方案1：绑定别名时声明跳过校验
+mc alias set myminio https://127.0.0.1:9000 admin password --insecure
+
+# 方案2：每次命令手动加
+mc ls --insecure myminio
+
+# 方案3：全局永久
+echo "export MC_INSECURE=true" >> /etc/profile
+source /etc/profile
+```
+
+### 7.4 `The Access Key Id you provided does not exist`
+
+``` bash
+# 1. 确认 AccessKey 和 SecretKey 正确
+mc alias list
+
+# 2. 用 admin 身份看用户列表
+mc admin user list myminio
+
+# 3. 检查 policy 是否 disable
+mc admin user info myminio <user>
+# Status: enabled / disabled
+```
+
+### 7.5 Bucket 删不掉：`The bucket you tried to delete is not empty`
+
+``` bash
+# 查看 Bucket 内容（包括已删除的版本）
+mc ls --versions myminio/my-bucket
+
+# 强制递归删除所有内容
+mc rm --recursive --force myminio/my-bucket
+
+# 再删 Bucket
+mc rb myminio/my-bucket
+```
+
+### 7.6 上传大文件报 `Your socket connection to the server was not read from or written to`
+
+``` bash
+# 默认超时 15 秒，大文件容易超时
+# 解决：加长超时
+mc cp --attr "X-Amz-Storage-Class=STANDARD" bigfile.tar.gz myminio/my-bucket/
+# 或用 --continue 断点续传
+mc cp --continue bigfile.tar.gz myminio/my-bucket/
+```
+
+### 7.7 纠删码磁盘掉线自动恢复
+
+``` bash
+# 查看磁盘状态
+mc admin info myminio
+
+# 某磁盘显示 offline → 换上新盘后
+# MinIO 自动重建数据（healing），不需手动干预
+
+# 手动触发 healing（可选）
+mc admin heal myminio
+```
+
+### 7.8 内存/CPU 异常高
+
+``` bash
+# 最常见：大量小文件扫描（ls/list 操作）
+# 排查：看 Prometheus 指标
+# minio_node_io_rchar_bytes：读流量
+# minio_s3_requests_total：API 请求量
+
+# 优化：
+# 1. 开启缓存：export MINIO_CACHE_DRIVES="/mnt/cache"
+# 2. 控制 mc ls 频率
+# 3. 用生命周期规则自动清理过期对象
+```
+
+---
+
+## 八、面试高频 12 题
+
+**1. MinIO 是什么？和 AWS S3 什么关系？**
+MinIO 是开源的高性能对象存储，完全兼容 AWS S3 API。你可以用 S3 SDK（Python/Go/Java）直接操作 MinIO，代码不改一行就能从云 S3 迁到自建 MinIO。
+
+**2. 纠删码（Erasure Code）原理？**
+把数据切分成 N 个数据块 + M 个校验块，分散存到 N+M 块盘上。容忍任意 M 块盘故障而不丢数据。MinIO 默认 M=N（比如 8 块盘能容忍 4 块故障）。
+
+**3. MinIO 分布式最少几个节点？**
+最少 4 个节点（或 4 块独立磁盘）。公式是 N/2 + 1 块盘在线才能读写（N 是总盘数）。
+
+**4. MinIO 和 Ceph 的区别？**
+MinIO 轻量（一个二进制）、专注对象存储、运维简单；Ceph 重（块/文件/对象全支持）、运维复杂、适合大规模统一存储。
+
+**5. 版本控制和生命周期怎么配合？**
+版本控制保留历史版本 → 磁盘用得越来越快 → 生命周期规则自动删旧版本。典型配置：保留 7 天非当前版本，90 天自动删 delete marker。
+
+**6. 预签名 URL 原理？**
+服务端用 SecretKey 对请求签名，生成带签名的临时 URL。客户端拿这个 URL 就能直传/直下载，不用经过应用服务器。URL 过期自动失效。
+
+**7. MinIO 怎么保证数据一致性？**
+写入时等 N/2+1 块盘返回成功才返回客户端（Quorum 写）；读取时从 N/2+1 块盘读，比对 hash 一致才返回。
+
+**8. MC_INSECURE=true 有什么风险？**
+跳过 TLS 证书校验，测试环境方便，生产环境不要开——等同于把 HTTPS 降级为 HTTP，中间人攻击风险。
+
+**9. MinIO 支持哪些身份认证？**
+内置 AccessKey/SecretKey、LDAP/AD 集成、OpenID Connect（OIDC）、STS（临时凭证）。
+
+**10. mc mirror 和 mc cp 的区别？**
+`mc cp` 单次拷贝；`mc mirror` 双向同步（增量复制，只传变化的文件），类似 rsync。
+
+**11. MinIO 在 K8s 中怎么部署？**
+用 MinIO Operator 或 Helm Chart 部署 StatefulSet。每个 PVC 对应一块数据盘。不建议用 Deployment，因为每个 Pod 需要稳定的磁盘标识。
+
+**12. MinIO 生产上最大的坑？**
+把纠删码磁盘放在系统根分区（`/` 或 `/root`）→ MinIO 拒绝使用；分布式集群时间不同步（NTP 未配）→ 节点被踢出集群。
+
+---
+
+## 九、总结
 
 从单机到集群、从命令行到代码调用，你已经覆盖了 MinIO 的核心能力：
 
