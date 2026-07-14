@@ -37,7 +37,7 @@ nvidia-smi mig -lgip
 ![52bda1b672b528c958db3ea442206d57.png](/images/A100通过MIG虚拟化并进行K8S调用/52bda1b672b528c958db3ea442206d57.png)
 
 ## 4. 创建 MIG 实例 
-#### 假设 Profile ID 为 19
+**假设 Profile ID 为 19**
 ```bash
 nvidia-smi mig -cgi 19  # 例如创建一个 1g.5gb 实例
 nvidia-smi mig -cgi 19,19,19,19,19,19,19 -C # 例如创建七个 1g.5gb 实例
