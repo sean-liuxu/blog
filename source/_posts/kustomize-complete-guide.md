@@ -283,14 +283,14 @@ kubectl kustomize ~/kustomize-demo/overlays/dev/ | grep -A10 'kind: ConfigMap'
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nginx-config-7k4m8d5g2f   # ← 自动加 hash！
+  name: nginx-config-7k4m8d5g2f   # ← 自动加了内容 hash！
   namespace: dev
 data:
   default.conf: |
     server { ... }
 ```
 
-**关键细节**：Kustomize 自动给 ConfigMap 名称追加了内容 hash（`-7k4m8d5g2f`）。这意味着 **配置内容变了，名称就变，Deployment 自动滚动更新**。不用手动 `kubectl rollout restart`。
+**为什么要加 hash？** 假设你不小心改了 nginx 配置中的某个参数，如果 ConfigMap 名字不变（始终叫 `nginx-config`），Deployment 不会知道内容变了，Pod 继续用旧配置运行。加 hash 之后：**配置内容变了 → ConfigMap 名字变了 → Deployment 挂载的 volume 引用也自动更新为新名字 → Pod 必然重建 → 新配置自动生效。** 这也是为什么 Deployment 里可以安全地写 `name: nginx-config` —— Kustomize 渲染时会自动替换。
 
 ### 3.2 让 Deployment 挂载生成的 ConfigMap
 
@@ -310,7 +310,22 @@ Kustomize 会自动把模板中的 `nginx-config` 替换为实际带 hash 的名
             name: nginx-config
 ```
 
-> Kustomize 会自动感知到这个 `name: nginx-config` 引用的是生成器同名的 ConfigMap，渲染时替换为带 hash 的实际名称。
+**这里有一个关键问题：ConfigMap 名称已经变成 `nginx-config-7k4m8d5g2f`，Deployment 里挂载的还是 `name: nginx-config`，那不就不匹配了吗？**
+
+这就是 Kustomize 最精妙的地方：**它会扫描所有资源，把引用了 `nginx-config` 的地方全部自动替换成带 hash 的名字。** 渲染后的 Deployment 实际上变成了：
+
+``` yaml
+# Deployment 渲染结果（关键字段）
+spec:
+  template:
+    spec:
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config-7k4m8d5g2f   # ← 自动替换了！
+```
+
+所以 Deployment 挂载的一定能对上 ConfigMap 的名字。**写的时候用固定名，渲染后自动变成 hash 名**，既保证了引用正确，又保证了内容变更即滚动更新。
 
 ### 3.3 Secret 生成器 — 从文字面值生成
 
