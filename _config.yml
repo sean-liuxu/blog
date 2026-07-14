@@ -98,6 +98,10 @@ ignore:
 ## Themes: https://hexo.io/themes/
 theme: butterfly
 
+# Markdown renderer settings
+marked:
+  breaks: false
+
 # Deployment
 ## Docs: https://hexo.io/docs/one-command-deployment
 deploy:
