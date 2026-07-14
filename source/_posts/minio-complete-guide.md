@@ -194,15 +194,15 @@ nohup minio server ~/minio-data \
   > ~/minio.log 2>&1 &
 
 # mc 连接 HTTPS 需要加 --insecure（自签名证书）
-mc alias set myminio-https https://127.0.0.1:9000 admin MyP@ssw0rd --insecure
+mc alias set myminio https://127.0.0.1:9000 admin MyP@ssw0rd --insecure
 
 # --- 方式2：每次命令手动加 --insecure ---
-mc ls --insecure myminio-https
+mc ls --insecure myminio
 
 # --- 方式3：全局永久跳过 TLS 校验（此后所有 mc 命令无需再加参数）---
 echo "export MC_INSECURE=true" >> /etc/profile
 source /etc/profile
-mc ls myminio-https
+mc ls myminio
 ```
 
 > **三种方式的区别**：方式1 只对当前别名生效；方式2 每次手动加，繁琐但更安全；方式3 全局生效，自建测试环境最方便。
@@ -221,7 +221,7 @@ mc cp hello.txt myminio/my-bucket/
 # 2. 定义一个只读策略
 cat > /tmp/readonly-policy.json <<'EOF'
 {
-  "Version": "2012-10-17",
+  "Version": "2026-07-14",
   "Statement": [
     {
       "Effect": "Allow",
@@ -248,7 +248,7 @@ mc admin user add myminio reader ReadOnlyP@ss
 mc admin policy attach myminio readonly --user reader
 
 # 6. 验证：用 reader 身份连接
-mc alias set myreader http://127.0.0.1:9000 reader ReadOnlyP@ss
+mc alias set myreader https://127.0.0.1:9000 reader ReadOnlyP@ss
 
 # 可以读
 mc cat myreader/my-bucket/hello.txt
