@@ -274,7 +274,11 @@ configMapGenerator:
 渲染出来看看：
 
 ``` bash
-kubectl kustomize ~/kustomize-demo/overlays/dev/ | grep -A10 'kind: ConfigMap'
+# 用 yq 精确提取 ConfigMap 部分（推荐）
+kubectl kustomize ~/kustomize-demo/overlays/dev/ | yq 'select(.kind=="ConfigMap")'
+
+# 如果没有 yq，grep 用 -B（查匹配行之前）而非 -A（之后），因为 data 在 kind 上面
+kubectl kustomize ~/kustomize-demo/overlays/dev/ | grep -B20 'kind: ConfigMap'
 ```
 
 输出：
