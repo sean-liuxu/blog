@@ -195,7 +195,17 @@ nohup minio server ~/minio-data \
 
 # mc 连接 HTTPS 需要加 --insecure（自签名证书）
 mc alias set myminio-https https://127.0.0.1:9000 admin MyP@ssw0rd --insecure
+
+# --- 方式2：每次命令手动加 --insecure ---
+mc ls --insecure myminio-https
+
+# --- 方式3：全局永久跳过 TLS 校验（此后所有 mc 命令无需再加参数）---
+echo "export MC_INSECURE=true" >> /etc/profile
+source /etc/profile
+mc ls myminio-https
 ```
+
+> **三种方式的区别**：方式1 只对当前别名生效；方式2 每次手动加，繁琐但更安全；方式3 全局生效，自建测试环境最方便。
 
 > **生产环境**：用 Let's Encrypt 或公司 CA 签发的证书，放在 `~/.minio/certs/` 下，MinIO 会自动续期。
 
