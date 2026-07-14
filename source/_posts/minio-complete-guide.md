@@ -221,7 +221,7 @@ mc cp hello.txt myminio/my-bucket/
 # 2. 定义一个只读策略
 cat > /tmp/readonly-policy.json <<'EOF'
 {
-  "Version": "2026-07-14",
+  "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
@@ -256,7 +256,7 @@ mc cat myreader/my-bucket/hello.txt
 
 # 无法写（预期报错）
 mc cp hello.txt myreader/my-bucket/hello2.txt
-# 报错：Access Denied
+# 报错：Insufficient permissions
 ```
 
 | 组件 | 说明 |
@@ -319,19 +319,27 @@ cat > /tmp/lifecycle.json <<'EOF'
 {
   "Rules": [
     {
-      "ID": "cleanup-old-versions",
+      "ID": "expire-current-objects-90d",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "Expiration": {
+        "Days": 90
+      }
+    },
+    {
+      "ID": "cleanup-noncurrent-7d-and-markers",
       "Status": "Enabled",
       "Filter": { "Prefix": "" },
       "NoncurrentVersionExpiration": {
         "NoncurrentDays": 7
       },
       "Expiration": {
-        "Days": 90,
         "ExpiredObjectDeleteMarker": true
       }
     }
   ]
 }
+EOF
 EOF
 
 # 导入到 Bucket
@@ -349,53 +357,92 @@ mc ilm ls myminio/my-bucket
 
 ---
 
-## 五、分布式部署篇
+## 五、多盘纠删篇：单机多磁盘
 
-单机适合开发和测试，生产环境需要**分布式 + 纠删码**保证高可用。
+单机也能跑纠删码（Erasure Code），实现"坏一块盘数据不丢"的效果。但这**不是分布式集群**，只是单节点多磁盘 — 先把这个概念搞对，再谈真正的分布式。
 
-### 5.1 分布式部署原理
+### 5.1 常见错误 1：磁盘在系统根分区
 
-MinIO 分布式集群最少 **4 个节点**，每个节点**至少 1 块磁盘**。数据通过纠删码（Erasure Code）分片存储，容忍最多 **一半节点故障**（4 节点中 2 台挂了数据仍可读）。
+如果你把数据目录放到 `~`（即 `/root`）下，MinIO 启动后会看到：
 
-**启动命令：**
-
-``` bash
-# 所有节点执行相同命令，只需改 IP 和挂载路径
-minio server \
-  http://minio-{1...4}.local:9000/data
+```
+drive is part of root drive, will not be used
 ```
 
-### 5.2 用 4 个目录模拟分布式集群
+MinIO 禁止把纠删码磁盘放在系统根分区。原因很简单：根分区 IO 压力大会拖垮系统，根盘故障则系统 + 数据同时丢失，纠删码就白做了。
 
-单机也能模拟，用 4 个目录代表 4 个节点的磁盘：
+**修复**：磁盘必须挂在独立分区或独立硬盘下。
 
 ``` bash
-# 创建 4 个数据目录
-mkdir -p ~/minio-cluster/{disk1,disk2,disk3,disk4}
+# 创建独立挂载目录（不要用 ~/ 或 /root）
+mkdir -p /mnt/disk1 /mnt/disk2 /mnt/disk3 /mnt/disk4
+```
 
-# 先停掉旧进程
-pkill minio
+> 如果只有一块物理盘，可以用 `losetup` + LVM 虚拟出 4 个分区来练习，不过生产环境必须是独立物理磁盘。
 
-# 启动分布式模式
+### 5.2 常见错误 2：把本地多盘当成分布式集群来写
+
+下面这种写法是**完全错误的**，很多新手会踩坑：
+
+``` bash
+# ❌ 错误写法：一个进程写多个端口，MinIO 根本不支持
+minio server \
+  http://127.0.0.1:9000/~/disk1 \
+  http://127.0.0.1:9001/~/disk2 \   # ← 报错：connection refused
+  http://127.0.0.2:9002/~/disk3 \
+  http://127.0.0.2:9003/~/disk4
+```
+
+**为什么错了？** MinIO 单进程只有一个 API 端口。你写 9001/9002/9003 这 3 个端口根本没进程在监听，自然 `connection refused`。
+
+**两种正确模式，一句话区分：**
+
+| 模式 | 语法 | 端口 | 场景 |
+|---|---|---|---|
+| 单机多盘纠删 | 直接写本地路径 `/mnt/disk1 ...` | 统一 9000 | 本地测试、学习 |
+| 真正分布式 | `http://节点IP:9000/路径 ...` | 每节点都 9000 | 生产、多台机器 |
+
+### 5.3 单机多盘纠删（你的学习场景）
+
+**前提**：4 个目录都在独立分区（`/mnt/disk*`），不在 `/root` 下。
+
+``` bash
+export MINIO_ROOT_USER=admin
+export MINIO_ROOT_PASSWORD=MyP@ssw0rd
+
+# ✅ 正确写法：本地路径，一个端口
 nohup minio server \
-  http://127.0.0.1:9000/~/minio-cluster/disk1 \
-  http://127.0.0.1:9001/~/minio-cluster/disk2 \
-  http://127.0.0.2:9002/~/minio-cluster/disk3 \
-  http://127.0.0.2:9003/~/minio-cluster/disk4 \
+  /mnt/disk1 \
+  /mnt/disk2 \
+  /mnt/disk3 \
+  /mnt/disk4 \
   --console-address ":19001" \
   > ~/minio-cluster.log 2>&1 &
 ```
 
-> **注意**：真实分布式环境各节点 IP 不同、时间同步（NTP）、磁盘格式为 XFS。这里用本地多目录只是学习分布式概念。
+关键点：**不需要 `http://` 前缀**，直接写本地路径。MinIO 自动在这些磁盘上构建纠删码。
 
-### 5.3 验证集群状态
+### 5.4 真正分布式集群（仅供参考，需要 4 台机器）
+
+真正生产中每台服务器各自运行一条 `minio server` 命令，指向其他服务器的 IP，**所有节点用同一个 9000 端口**：
+
+``` bash
+# 4 台机器执行相同命令，0.1/0.2/0.3/0.4 是各自的 IP
+minio server \
+  http://192.168.55.1:9000/mnt/data \
+  http://192.168.55.2:9000/mnt/data \
+  http://192.168.55.3:9000/mnt/data \
+  http://192.168.55.4:9000/mnt/data \
+  --console-address ":19001"
+```
+
+> 需要 NTP 时间同步 + XFS 文件系统 + 至少 4 台独立服务器，每台最小 1 块独立磁盘。
+
+### 5.5 验证纠删码状态
 
 ``` bash
 mc admin info myminio
-# 显示 4 个节点，每节点 1 块盘，Total Capacity = 各盘之和
-
-# 查看各节点状态
-mc admin info myminio --json | jq '.info.servers[] | {endpoint: .endpoint, state: .state, drives: [.drives[].state]}'
+# 显示 4 块盘 online，Total Capacity = 各盘容量之和（扣除纠删开销后可用约 50%）
 ```
 
 ---
