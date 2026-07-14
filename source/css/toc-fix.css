@@ -18,3 +18,22 @@
   padding-left: 36px;
   opacity: 0.7;
 }
+
+/* 修复图片插入后间距过大：p 的 16px + img 的 20px = 36px 间距太大 */
+#article-container p:has(img) {
+  margin: 8px 0;
+}
+
+#article-container p img {
+  margin-bottom: 4px;
+}
+
+/* 图片放大：hover 时光标变为放大镜 */
+#article-container img {
+  cursor: zoom-in;
+}
+
+.medium-zoom-overlay,
+.medium-zoom-image--opened {
+  cursor: zoom-out;
+}

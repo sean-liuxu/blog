@@ -289,7 +289,7 @@ aside:
       enable: true
       icon: fab fa-github
       text: Follow Me
-      link: https://github.com/xxxxxx
+      link: https://github.com/sean-liuxu
   card_announcement:
     enable: true
     content: This is my Blog
@@ -1063,7 +1063,8 @@ inject:
     - <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     - <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
   bottom:
-    # - <script src="xxxx"></script>
+    - <script src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js"></script>
+    - <script>document.addEventListener('DOMContentLoaded',function(){mediumZoom('#article-container img',{margin:24,background:'rgba(0,0,0,.88)',scrollOffset:0})})</script>
 
 # CDN Settings
 # Don't modify the following settings unless you know how they work
