@@ -2,10 +2,7 @@
 title: HAMi vGPU 完整掌握 — Kubernetes GPU 共享与隔离
 date: 2026-07-24 15:00:00
 tags:
-  - Kubernetes
-  - GPU
-  - vGPU
-  - HAMi
+  - GPU虚拟化
 categories:
   - 云原生
 ---
@@ -14,9 +11,9 @@ categories:
 
 [上一篇文章](/2026/07/14/A100通过MIG虚拟化并进行K8S调用/) 我们讲了 A100 的 MIG 硬件切分——性能最强、隔离最硬，但只有 A100/A30/H100 才支持。那普通的 Tesla T4、V100、A10 怎么办？K8s 原生限制一张 GPU 只能分给一个 Pod，跑个小推理就独占 16GB 显存，太浪费了。
 
-**HAMi**（Heterogeneous AI Computing Virtualization Middleware）就是解决这个问题的开源 vGPU 方案。它不挑 GPU 型号，能在驱动层拦截 CUDA API 调用，把一张物理 GPU 切分成多份虚拟 GPU，每份独立限制显存和算力，给多个 Pod 同时使用。
+**HAMi**（Heterogeneous AI Computing Virtualization Middleware）就是解决这个问题的开源 vGPU 方案。它原名「第四范式 k8s-vgpu-scheduler」，这次改名 HAMi 的同时也将核心的 vCUDA 库 `libvgpu.so` 开源了。它不挑 GPU 型号，能在驱动层拦截 CUDA API 调用，把一张物理 GPU 切分成多份虚拟 GPU，每份独立限制显存和算力，给多个 Pod 同时使用。
 
-> 本文参考 [HAMi 官方文档](https://project-hami.io/) 及社区实践，按从简到难、从原理到实操组织。
+> 前置阅读：[GPU 使用指南：如何在裸机、Docker、K8s 等环境中使用 GPU](/2026/07/23/GPU-Basic/)，了解基础 GPU 环境搭建。
 
 ---
 
@@ -117,8 +114,6 @@ Pod 申请: nvidia.com/gpu=1, nvidia.com/gpumem=3000, nvidia.com/gpucores=30
 
 HAMi 依赖 NVIDIA 驱动栈，推荐先通过 **GPU Operator** 部署好底层组件（驱动 + container-toolkit + device-plugin）。
 
-> GPU Operator 快速部署指南参考上一篇文章：[GPU 环境搭建指南：使用 GPU Operator 加速 Kubernetes GPU 环境搭建](/2026/07/23/GPU-Basic/)。
-
 如果已经手动配好 NVIDIA 环境，确认以下 3 点：
 
 ``` bash
@@ -193,7 +188,12 @@ helm install hami hami-charts/hami \
 | `devicePlugin.migStrategy` | none | MIG 策略，mixed 则专用资源名指定 MIG 设备 |
 | `scheduler.defaultMem` | 5000 | 不配显存时的默认值（MB） |
 | `scheduler.defaultCores` | 0 | 默认算力预留百分比，0=不限制 |
-| `scheduler.defaultGPUNum` | 1 | 默认 vGPU 数量 |
+| `scheduler.defaultGPUNum` | 1 | 默认 vGPU 数量，当 Pod 没设 `nvidia.com/gpu` 但有 `gpumem/gpucores` 时自动补 |
+| `resourceName` | `nvidia.com/gpu` | 申请 vGPU 数量的资源名 |
+| `resourceMem` | `nvidia.com/gpumem` | 申请 vGPU 显存大小的资源名 |
+| `resourceMemPercentage` | `nvidia.com/gpumem-percentage` | 申请 vGPU 显存比例的资源名 |
+| `resourceCores` | `nvidia.com/gpucores` | 申请 vGPU 算力比例的资源名 |
+| `resourcePriority` | `nvidia.com/priority` | 任务优先级资源名 |
 
 **容器级别也有两个重要环境变量：**
 
@@ -212,38 +212,52 @@ helm install hami hami-charts/hami \
 apiVersion: v1
 kind: Pod
 metadata:
-  name: vgpu-test
+  name: gpu-pod
 spec:
   containers:
-    - name: cuda-test
-      image: nvidia/cuda:12.0.1-runtime-ubuntu22.04
-      command: ["bash", "-c", "nvidia-smi && sleep 3600"]
+    - name: ubuntu-container
+      image: ubuntu:18.04
+      command: ["bash", "-c", "sleep 86400"]
       resources:
         limits:
-          nvidia.com/gpu: 1            # 1 个 vGPU
-          nvidia.com/gpumem: 3000      # 限制 3000MB 显存
-          nvidia.com/gpucores: 30      # 限制 30% 算力
+          nvidia.com/gpu: 1            # 请求 1 个 vGPU
+          nvidia.com/gpumem: 3000      # 每个 vGPU 申请 3000MB 显存（可选，整数类型）
+          nvidia.com/gpucores: 30      # 每个 vGPU 的算力为 30% 实际显卡的算力（可选，整数类型）
 ```
 
 ``` bash
-kubectl apply -f vgpu-test.yaml
-kubectl exec vgpu-test -- nvidia-smi
+kubectl apply -f gpu-pod.yaml
+kubectl exec gpu-pod -- nvidia-smi
 ```
 
-输出中会看到 `HAMi-core Msg` 初始化日志，且显存显示为 `0MiB / 3000MiB`（而非整张卡的 15360MiB）：
+输出中会看到 `[HAMI-core Msg]` 初始化日志，且显存显示为 `0MiB / 3000MiB`（而非整张卡的 15360MiB）。退出时 `nvidia-smi` 还会打印 HAMi-core 的清理日志：
 
 ```
-[HAMI-core Msg(16:...:libvgpu.c:836)]: Initializing.....
-+-----------------------------------------------------------------------------+
-| NVIDIA-SMI 535.161.08    Driver Version: 535.161.08    CUDA Version: 12.2   |
-|-------------------------------+----------------------+----------------------+
-| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
-|===============================+======================+======================|
-|   0  Tesla T4            On   | 00000000:3B:00.0 Off |                    0 |
-| N/A   32C    P8     9W /  70W |      0MiB / 3000MiB |      0%      Default |
-+-------------------------------+----------------------+----------------------+
+[HAMI-core Msg(16:139711087368000:libvgpu.c:836)]: Initializing.....
+Mon Apr 29 06:22:16 2024
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  Tesla T4                       On  |   00000000:00:07.0 Off |                    0 |
+| N/A   33C    P8             15W /   70W |       0MiB /   3000MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+[HAMI-core Msg(16:139711087368000:multiprocess_memory_limit.c:434)]: Calling exit handler 16
 ```
+
+> 最后一行 exit handler 日志就是 HAMi 的 vCUDA 库在容器退出时打印的，说明 `libvgpu.so` 确实接管了 CUDA 调用。`nvidia-smi` 显示的 3000MiB 上限也正是 Pod 中 `nvidia.com/gpumem: 3000` 所申请的。
 
 ### 4.2 资源字段速查
 
@@ -253,7 +267,8 @@ kubectl exec vgpu-test -- nvidia-smi
 | `nvidia.com/gpumem` | 显存限制（MB） | `3000` |
 | `nvidia.com/gpumem-percentage` | 显存百分比 | `20`（表示 20%） |
 | `nvidia.com/gpucores` | 算力百分比（0-100） | `30` |
-| `nvidia.com/priority` | 优先级：0 高 / 1 低（默认 1） | `0` |
+| `nvidia.com/gpumem-percentage` | 显存百分比（如 50 = 50%） | `50` |
+| `nvidia.com/priority` | 优先级：0=高 / 1=低（默认 1） | `0` |
 
 ### 4.3 优先级策略
 
