@@ -13,6 +13,8 @@ categories:
 
 **HAMi**（Heterogeneous AI Computing Virtualization Middleware）就是解决这个问题的开源 vGPU 方案。原项目`k8s-vgpu-scheduler`，这次改名 `HAMi` 的同时也将核心的 `vCUDA` 库 `libvgpu.so` 开源了。它不挑 GPU 型号，能在驱动层拦截 CUDA API 调用，把一张物理 GPU 切分成多份虚拟 GPU，每份独立限制显存和算力，给多个 Pod 同时使用。
 
+[官方文档](https://project-hami.io/zh/docs)
+
 > 前置阅读：[GPU 使用指南：如何在裸机、Docker、K8s 等环境中使用 GPU](/2026/07/23/GPU-Basic/)，了解基础 GPU 环境搭建。
   
 ---
