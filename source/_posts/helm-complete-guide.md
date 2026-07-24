@@ -158,7 +158,21 @@ helm rollback my-nginx 1
 
 # 卸载
 helm uninstall my-nginx
+
+# 卸载指定命名空间的 Release
+helm uninstall my-nginx -n dev
+
+# 卸载但保留历史记录（恢复时可用 helm rollback）
+helm uninstall my-nginx --keep-history
+
+# 模拟卸载，看看会删哪些资源但不真正执行
+helm uninstall my-nginx --dry-run
+
+# 查看已被标记为删除的 Release
+helm list --uninstalled
 ```
+
+> `helm uninstall` 会删除 Release 关联的所有 K8s 资源（Deployment、Service、ConfigMap 等）。`--keep-history` 保留历史 Secret 以便恢复，`--dry-run` 预览要删的资源。如果只是想暂时停掉服务，建议 scale replicas 为 0 而不是直接 uninstall。
 
 > **理解关键概念**：
 > - **Chart**：应用包（模板 + 默认值）
