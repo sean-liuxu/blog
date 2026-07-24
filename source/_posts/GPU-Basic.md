@@ -464,3 +464,76 @@ Done
 - 对应 k8s 环境，需要额外安装对应的 `device-plugin` 使得 kubelet 能够感知到节点上的 GPU 设备，以便 k8s 能够进行 GPU 管理。
 
 现在一般都是在 k8s 环境中使用，为了简化安装步骤，NVIDIA 也提供了 `gpu-operator` 来简化安装部署。
+
+---
+
+## 6. 面试高频 5 题
+
+**1. `nvidia-smi` 显示的 CUDA Version 和 `nvcc -V` 显示的 CUDA Version 为什么不同？分别代表什么？**
+
+`nvidia-smi` 右上角的 CUDA Version 是**当前 GPU 驱动最大支持的 CUDA 版本**（上限），由驱动决定；`nvcc -V` 显示的是**CUDA Toolkit 的版本**（实际编译工具链的版本）。两者解耦：驱动向下兼容所有 ≤ 自身版本的 CUDA Toolkit，所以你可以装 CUDA 12.2 的 Toolkit 跑在支持 CUDA 12.8 的驱动上。生产上常见坑：驱动版本太老，不支持新版 CUDA Toolkit 编译出的二进制——报错 `cudaErrorNoDevice` 或 `driver version is insufficient`。
+
+---
+
+**2. Docker 容器的 GPU 挂载到底发生了什么？`--gpus all` 背后做了什么？**
+
+`--gpus all` 触发了三条链路：
+1. **OCI spec 注入**：`nvidia-container-runtime` 作为 OCI runtime hook，拦截 `runc` 的 `create` 动作，读取容器的 OCI spec；
+2. **设备挂载**：调用 `nvidia-container-cli` 将 `/dev/nvidia*`（nvidia0、nvidiactl、nvidia-uvm 等）设备节点挂载进容器的 `/dev/`；
+3. **库文件挂载**：将宿主机上的 NVIDIA 驱动库（`libcuda.so`、`libnvidia-ml.so` 等）和二进制（`nvidia-smi`）以 prestart hook 方式注入容器。
+
+所以容器里跑 `nvidia-smi` 看到的其实是**宿主机的驱动版本**——容器本身不需要装驱动，只需要有驱动库的挂载点。CUDA Toolkit 则可以选择装在镜像里，或者也通过挂载注入（`NVIDIA_DRIVER_CAPABILITIES=compute,utility`）。
+
+---
+
+**3. K8s 中 `nvidia.com/gpu: 1` 申请 GPU 后，调度器怎么保证不会把同一张 GPU 分给两个 Pod？**
+
+K8s 的 Device Plugin 机制通过以下流程保证互斥：
+1. **注册阶段**：`nvidia-device-plugin` 启动时调用 `ListAndWatch`，向 kubelet 上报节点所有 GPU 的拓扑信息（PCI Bus ID、UUID）；
+2. **调度阶段**：kubelet 将 GPU 作为 Extended Resource 上报给 API Server，调度器视其为**不可超分的标量资源**（不像 CPU 可超分）；
+3. **分配阶段**：Pod 调度到节点后，kubelet 调 Device Plugin 的 `Allocate` 接口，Device Plugin 从自己的 GPU 池子中分配具体 GPU ID，写入环境变量 `NVIDIA_VISIBLE_DEVICES=GPU-<uuid>`，并把已分配的 GPU 从可用池中移除；
+4. **隔离保证**：`nvidia-container-runtime` 读 `NVIDIA_VISIBLE_DEVICES` 只挂载指定的 GPU 设备节点，其他 GPU 对该容器不可见。
+
+关键点：GPU 是**整卡分配**（除非开启 MIG 或 vGPU），不支持 fractional（0.5 张卡），同一张卡不会同时分给两个 Pod。
+
+---
+
+**4. MIG（Multi-Instance GPU）、vGPU、Time-Slicing 三种 GPU 切分方案的区别是什么？各自适用什么场景？**
+
+三种方案解决同一个问题——一张物理 GPU 如何共享给多个容器/用户——但切分维度完全不同：
+
+| 方案 | 切分层 | 隔离级别 | 显存划分 | 算力划分 | 适用场景 |
+|---|---|---|---|---|---|
+| **MIG** | 硬件级 | 强（硬件隔离） | 静态固定切分 | 静态固定切分 | A100/A30/H100，推理+训练混合 |
+| **vGPU** | 驱动级 | 中（SR-IOV 虚拟化） | 固定或动态 | 时间片轮转 | 虚拟桌面、多人共享云 GPU |
+| **Time-Slicing** | CUDA 调度层 | 弱（时间片轮转） | 共享 | 时间片交替 | 开发测试、小负载并发 |
+
+**MIG 原理**：以 A100 为例，一张卡最大可切 7 个 GPU Instance（GI），每个 GI 独占一组 SM（流处理器）和显存通道，硬件层面电气隔离。一个 GI 死循环不影响其他 GI，延迟抖动极低。代价是切分后不可动态调整，必须 `nvidia-smi -mig 0` 重启 GPU 才能改配置。
+
+**vGPU 原理**：在驱动层虚拟出多张"假 GPU"，每个 VM/容器看到一张独立显卡，实际背后由 GPU Manager 做时分复用。需要 NVIDIA vGPU 商业 License，适合 VMware/OpenStack 虚拟化场景。
+
+**Time-Slicing 原理**：最简单、零门槛，在 `device-plugin` 配置中加 `time-slicing` 声明即可。同一张 GPU 上的多个 CUDA Context 按时间片轮转执行，K8s 中表现为 Pod 能申请 "半张 GPU"（`nvidia.com/gpu: 0.5`）。代价是没有显存隔离——一个 Pod 的 `cudaMalloc` 可能因另一个 Pod 占用全部显存而失败。
+
+> **面试常问坑点**：Time-Slicing 只划分调度时间，不划分显存。你以为每个 Pod 分到 0.5 张 GPU = 7GB 显存，实际上第一个 Pod 可能吃满 14GB，第二个直接 OOM。需要配合显存限制（`CUDA_MPS_PINNED_DEVICE_MEM_LIMIT`）或直接用 MIG。
+
+---
+
+**5. 从裸机到 K8s，GPU 调用链经过哪些组件？如果 `nvidia-smi` 在容器内报 `Failed to initialize NVML: Driver/library version mismatch`，根因在哪一层？**
+
+完整调用链：
+
+```
+容器内 CUDA 程序
+  → libcuda.so（容器内或挂载的）
+    → /dev/nvidia0（设备节点，挂载自宿主机）
+      → nvidia.ko（宿主机内核驱动）
+        → GPU 硬件
+```
+
+报错 `Driver/library version mismatch` 意味着**内核驱动版本**（`nvidia.ko`，即 `nvidia-smi` 显示的 Driver Version）和**用户态库版本**（`libcuda.so`）不匹配。
+
+根因只有两种可能：
+1. **宿主机升级了驱动但没重启**：新 `nvidia.ko` 已加载但部分旧的用户态库残留，`nvidia-container-toolkit` 挂载了不匹配的库到容器里 → 重启宿主机；
+2. **容器镜像自带的 CUDA Toolkit 与宿主机驱动不兼容**：镜像里的 `libcuda.so` 要求 >= 某个驱动版本，而宿主机驱动太老 → 降级镜像或升级宿主机驱动。
+
+排查命令：对比 `nvidia-smi`（宿主机）的 Driver Version 和容器内 `ls /usr/lib/x86_64-linux-gnu/libcuda.so*` 的库版本。
