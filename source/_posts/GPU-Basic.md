@@ -46,6 +46,51 @@ root@test:~# lspci | grep NVIDIA
 
 可以看到，该设备有两张 Tesla T4 GPU。
 
+### 2.0 禁用 nouveau 驱动（必须）
+
+Linux 系统默认加载了开源的 nouveau 驱动来驱动 NVIDIA 显卡。如果不先禁用，安装 NVIDIA 官方驱动时会冲突，导致安装失败或系统不稳定。**安装官方驱动前必须先禁用 nouveau。**
+
+检查 nouveau 是否已加载：
+
+``` bash
+lsmod | grep nouveau
+# 如果有输出，说明 nouveau 正在运行，需要禁用
+```
+
+**步骤 1：创建 blacklist 配置文件**
+
+``` bash
+cat > /etc/modprobe.d/blacklist-nouveau.conf <<'EOF'
+blacklist nouveau
+options nouveau modeset=0
+EOF
+```
+
+**步骤 2：更新 initramfs 使配置生效**
+
+``` bash
+# CentOS / RHEL
+sudo dracut --force
+
+# Ubuntu / Debian
+sudo update-initramfs -u
+```
+
+**步骤 3：重启系统**
+
+``` bash
+sudo reboot
+```
+
+**步骤 4：验证 nouveau 已被禁用**
+
+``` bash
+lsmod | grep nouveau
+# 应该没有输出，说明 nouveau 已禁用
+```
+
+> 如果重启后 nouveau 仍在运行，检查 `/etc/default/grub` 中 `GRUB_CMDLINE_LINUX` 是否包含 `nouveau.modeset=0`，然后执行 `sudo grub2-mkconfig -o /boot/grub2/grub.cfg` 并重启。
+
 ### 2.1 安装驱动
 
 首先到 [NVIDIA 驱动下载](https://www.nvidia.cn/Download/index.aspx?lang=cn#) 下载对应的显卡驱动：
