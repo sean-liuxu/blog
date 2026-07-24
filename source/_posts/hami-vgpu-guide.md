@@ -175,7 +175,7 @@ helm install hami hami-charts/hami \
   --set scheduler.defaultCores=0 \                 # 默认算力比例
   -n kube-system
 ```
-
+[参加文档](https://project-hami.io/zh/docs/userguide/configure)
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `devicePlugin.deviceSplitCount` | 10 | 每张物理 GPU 最多同时跑的任务数 |
