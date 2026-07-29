@@ -45,6 +45,71 @@ easzlab.io.local:53 {
 }
 ```
 
+### local-path StorageClass 部署
+
+`local-path` 是 Rancher 出品的一款轻量级 StorageClass，在节点本地磁盘上动态创建 PV，不需要外部存储系统。适合测试环境和不要求跨节点共享存储的场景。
+
+``` bash
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+```
+
+部署完成后验证：
+
+``` bash
+kubectl -n local-path-storage get pods
+# local-path-provisioner-xxxxx   1/1   Running
+
+kubectl get sc
+# NAME          PROVISIONER           RECLAIMPOLICY   VOLUMEBINDINGMODE
+# local-path    rancher.io/local-path  Delete          WaitForFirstConsumer
+```
+
+**关键配置：**
+
+``` yaml
+# 默认的 ConfigMap（可自定义存储路径）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-path-config
+  namespace: local-path-storage
+data:
+  config.json: |
+    {
+      "nodePathMap":[
+        {"node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+         "paths":["/opt/local-path-provisioner"]}
+      ]
+    }
+```
+
+| 配置项 | 说明 |
+|---|---|
+| `nodePathMap` | 按节点指定 PV 数据目录，`DEFAULT_PATH_FOR_NON_LISTED_NODES` 是未显式配置节点的默认路径 |
+| `paths` | 可配置多个路径，provisioner 会轮询使用（负载均衡） |
+| `VOLUMEBINDINGMODE` | `WaitForFirstConsumer`：Pod 调度到节点后才创建 PV，避免跨节点挂载 |
+
+**工作原理：**
+
+```
+PVC 创建 (WFFC, Pending)
+  ↓ Pod 引用 PVC, Scheduler 调度 Pod 到 NodeX
+PVC 触发 Provision
+  ↓ local-path-provisioner 在 NodeX 上:
+  ↓   mkdir -p /opt/local-path-provisioner/<pvc-uuid>
+  ↓   ln -s /opt/local-path-provisioner/<pvc-uuid> /var/lib/kubelet/pods/.../volumes/...
+PV 创建 (Bound)
+  ↓ Pod 启动，挂载本地目录
+```
+
+> **为什么选 local-path？** KubeVirt VM 的磁盘文件通常较大（几十 GB），local-path 直接使用节点本地磁盘，I/O 路径最短，没有网络存储的延迟开销。代价是 PV 和 Pod 必须在同一节点——对于单 worker 或 VM 不跨节点迁移的场景完全够用。
+
+如果节点磁盘空间不足，可以修改 ConfigMap 中的 `paths` 指向更大的挂载点：
+
+``` yaml
+"paths":["/data/local-path-provisioner", "/data2/local-path-provisioner"]
+```
+
 ---
 
 ## 2. KubeVirt + CDI 安装
