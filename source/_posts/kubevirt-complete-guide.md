@@ -3,9 +3,6 @@ title: KubeVirt 完整掌握 — 从零到 50 VM 压力测试
 date: 2026-07-29 10:00:00
 tags:
   - KubeVirt
-  - 虚拟化
-  - Kubernetes
-  - 压力测试
 categories:
   - 云原生
 ---
